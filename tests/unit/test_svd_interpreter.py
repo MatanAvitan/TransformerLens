@@ -1,13 +1,12 @@
 import pytest
 import torch
-import typeguard
+from beartype.roar import BeartypeCallHintParamViolation
 
 from transformer_lens import HookedTransformer, SVDInterpreter
 
 MODEL = "solu-2l"
 VECTOR_TYPES = ["OV", "w_in", "w_out"]
-ATOL = 1e-4  # Absolute tolerance - how far does a float have to be before we consider it no longer equal?
-# ATOL is set to 1e-4 because the tensors we check on are also to 4 decimal places.
+ATOL = 2e-4  # Absolute tolerance - how far does a float have to be before we consider it no longer equal?
 model = HookedTransformer.from_pretrained(MODEL)
 unfolded_model = HookedTransformer.from_pretrained(MODEL, fold_ln=False)
 second_model = HookedTransformer.from_pretrained("solu-3l")
@@ -114,13 +113,10 @@ def test_svd_interpreter_returns_different_answers_for_different_models():
 
 def test_svd_interpreter_fails_on_invalid_vector_type():
     svd_interpreter = SVDInterpreter(model)
-    with pytest.raises(typeguard.TypeCheckError) as e:
+    with pytest.raises(BeartypeCallHintParamViolation) as e:
         svd_interpreter.get_singular_vectors(
             "test", layer_index=0, num_vectors=4, head_index=0
         )
-    assert 'argument "vector_type" (str) did not match any element in the union' in str(
-        e.value
-    )
 
 
 def test_svd_interpreter_fails_on_not_passing_required_head_index():

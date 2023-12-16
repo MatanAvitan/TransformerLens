@@ -1,4 +1,7 @@
-# %%
+"""Loading Pretrained Models Utilities.
+
+This module contains functions for loading pretrained models from the Hugging Face Hub.
+"""
 import dataclasses
 import logging
 import re
@@ -12,7 +15,6 @@ from transformers import AutoConfig, AutoModelForCausalLM, BertForPreTraining
 import transformer_lens.utils as utils
 from transformer_lens.HookedTransformerConfig import HookedTransformerConfig
 
-# %% The model names used to access the models on the HuggingFace Hub.
 OFFICIAL_MODEL_NAMES = [
     "gpt2",
     "gpt2-medium",
@@ -41,6 +43,8 @@ OFFICIAL_MODEL_NAMES = [
     "stanford-crfm/celebrimbor-gpt2-medium-x81",
     "stanford-crfm/durin-gpt2-medium-x343",
     "stanford-crfm/eowyn-gpt2-medium-x777",
+    "EleutherAI/pythia-14m",
+    "EleutherAI/pythia-31m",
     "EleutherAI/pythia-70m",
     "EleutherAI/pythia-160m",
     "EleutherAI/pythia-410m",
@@ -73,6 +77,9 @@ OFFICIAL_MODEL_NAMES = [
     "EleutherAI/pythia-2.8b-deduped-v0",
     "EleutherAI/pythia-6.9b-deduped-v0",
     "EleutherAI/pythia-12b-deduped-v0",
+    "EleutherAI/pythia-160m-seed1",
+    "EleutherAI/pythia-160m-seed2",
+    "EleutherAI/pythia-160m-seed3",
     "NeelNanda/SoLU_1L_v9_old",
     "NeelNanda/SoLU_2L_v10_old",
     "NeelNanda/SoLU_4L_v11_old",
@@ -104,6 +111,11 @@ OFFICIAL_MODEL_NAMES = [
     "llama-13b-hf",
     "llama-30b-hf",
     "llama-65b-hf",
+    "Llama-2-7b-hf",
+    "Llama-2-7b-chat-hf",
+    "Llama-2-13b-hf",
+    "Llama-2-13b-chat-hf",
+    # TODO Llama-2-70b-hf requires Grouped-Query Attention, see the paper https://arxiv.org/pdf/2307.09288.pdf
     "Baidicoot/Othello-GPT-Transformer-Lens",
     "bert-base-cased",
     "roneneldan/TinyStories-1M",
@@ -120,7 +132,14 @@ OFFICIAL_MODEL_NAMES = [
     "roneneldan/TinyStories-2Layers-33M",
     "roneneldan/TinyStories-Instuct-1Layer-21M",
     "roneneldan/TinyStories-Instruct-2Layers-33M",
+    "stabilityai/stablelm-base-alpha-3b",
+    "stabilityai/stablelm-base-alpha-7b",
+    "stabilityai/stablelm-tuned-alpha-3b",
+    "stabilityai/stablelm-tuned-alpha-7b",
+    "bigscience/bloom-560m",
+    "bigcode/santacoder",
 ]
+"""Official model names for models on HuggingFace."""
 
 # Model Aliases:
 MODEL_ALIASES = {
@@ -178,6 +197,12 @@ MODEL_ALIASES = {
         "solu-4l-wiki",
         "solu-4l-wiki-finetune",
         "solu-4l-finetune",
+    ],
+    "EleutherAI/pythia-14m": [
+        "pythia-14m",
+    ],
+    "EleutherAI/pythia-31m": [
+        "pythia-31m",
     ],
     "EleutherAI/pythia-70m": [
         "pythia-70m",
@@ -341,6 +366,21 @@ MODEL_ALIASES = {
         "EleutherAI/pythia-13b-deduped-v0",  # EleutherAI renamed this model
         "pythia-13b-deduped-v0",
     ],
+    "EleutherAI/pythia-160m-seed1": [
+        "pythia-160m-seed1",
+        "EleutherAI/pythia-125m-seed1",
+        "pythia-125m-seed1",  # EleutherAI renamed this model"
+    ],
+    "EleutherAI/pythia-160m-seed2": [
+        "pythia-160m-seed2",
+        "EleutherAI/pythia-125m-seed2",
+        "pythia-125m-seed2",  # EleutherAI renamed this model"
+    ],
+    "EleutherAI/pythia-160m-seed3": [
+        "pythia-160m-seed3",
+        "EleutherAI/pythia-125m-seed3",
+        "pythia-125m-seed3",  # EleutherAI renamed this model"
+    ],
     "gpt2": ["gpt2-small"],
     "distilgpt2": ["distillgpt2", "distill-gpt2", "distil-gpt2", "gpt2-xs"],
     "facebook/opt-125m": ["opt-125m", "opt-small", "opt"],
@@ -420,6 +460,11 @@ MODEL_ALIASES = {
     "llama-13b-hf": ["llama-13b"],
     "llama-30b-hf": ["llama-30b"],
     "llama-65b-hf": ["llama-65b"],
+    "Llama-2-7b-hf": ["Llama-2-7b", "meta-llama/Llama-2-7b-hf"],
+    "Llama-2-7b-chat-hf": ["Llama-2-7b-chat", "meta-llama/Llama-2-7b-chat-hf"],
+    "Llama-2-13b-hf": ["Llama-2-13b", "meta-llama/Llama-2-13b-hf"],
+    "Llama-2-13b-chat-hf": ["Llama-2-13b-chat", "meta-llama/Llama-2-13b-chat-hf"],
+    # TODO Llama-2-70b-hf requires Grouped-Query Attention, see the paper https://arxiv.org/pdf/2307.09288.pdf
     "Baidicoot/Othello-GPT-Transformer-Lens": ["othello-gpt"],
     "roneneldan/TinyStories-1M": ["tiny-stories-1M"],
     "roneneldan/TinyStories-3M": ["tiny-stories-3M"],
@@ -435,7 +480,26 @@ MODEL_ALIASES = {
     "roneneldan/TinyStories-2Layers-33M": ["tiny-stories-2L-33M"],
     "roneneldan/TinyStories-Instuct-1Layer-21M": ["tiny-stories-instruct-1L-21M"],
     "roneneldan/TinyStories-Instruct-2Layers-33M": ["tiny-stories-instruct-2L-33M"],
+    "stabilityai/stablelm-base-alpha-3b": [
+        "stablelm-base-alpha-3b",
+        "stablelm-base-3b",
+    ],
+    "stabilityai/stablelm-base-alpha-7b": [
+        "stablelm-base-alpha-7b",
+        "stablelm-base-7b",
+    ],
+    "stabilityai/stablelm-tuned-alpha-3b": [
+        "stablelm-tuned-alpha-3b",
+        "stablelm-tuned-3b",
+    ],
+    "stabilityai/stablelm-tuned-alpha-7b": [
+        "stablelm-tuned-alpha-7b",
+        "stablelm-tuned-7b",
+    ],
+    "bigscience/bloom-560m": ["bloom-560m"],
+    "bigcode/santacoder": ["santacoder"],
 }
+"""Model aliases for models on HuggingFace."""
 
 # Sets a default model alias, by convention the first one in the model alias table, else the official name if it has no aliases
 DEFAULT_MODEL_ALIASES = [
@@ -482,20 +546,22 @@ def convert_hf_model_config(model_name: str, **kwargs):
     # In case the user passed in an alias
     official_model_name = get_official_model_name(model_name)
     # Load HuggingFace model config
-    if "llama" not in official_model_name:
+    if "llama" not in official_model_name.lower():
         hf_config = AutoConfig.from_pretrained(official_model_name, **kwargs)
         architecture = hf_config.architectures[0]
     else:
-        architecture = "LLaMAForCausalLM"
-    if "llama-7b" in official_model_name:
+        architecture = "LlamaForCausalLM"
+    if official_model_name.startswith(
+        ("llama-7b", "Llama-2-7b")
+    ):  # same architecture for LLaMA and Llama-2
         cfg_dict = {
             "d_model": 4096,
             "d_head": 4096 // 32,
             "n_heads": 32,
             "d_mlp": 11008,
             "n_layers": 32,
-            "n_ctx": 2048,
-            "eps": 1e-6,
+            "n_ctx": 2048 if official_model_name.startswith("llama-7b") else 4096,
+            "eps": 1e-6 if official_model_name.startswith("llama-7b") else 1e-5,
             "d_vocab": 32000,
             "act_fn": "silu",
             "normalization_type": "RMS",
@@ -504,15 +570,17 @@ def convert_hf_model_config(model_name: str, **kwargs):
             "final_rms": True,
             "gated_mlp": True,
         }
-    elif "llama-13b" in official_model_name:
+    elif official_model_name.startswith(
+        ("llama-13b", "Llama-2-13b")
+    ):  # same architecture for LLaMA and Llama-2
         cfg_dict = {
             "d_model": 5120,
             "d_head": 5120 // 40,
             "n_heads": 40,
             "d_mlp": 13824,
             "n_layers": 40,
-            "n_ctx": 2048,
-            "eps": 1e-6,
+            "n_ctx": 2048 if official_model_name.startswith("llama-13b") else 4096,
+            "eps": 1e-6 if official_model_name.startswith("llama-13b") else 1e-5,
             "d_vocab": 32000,
             "act_fn": "silu",
             "normalization_type": "RMS",
@@ -657,6 +725,39 @@ def convert_hf_model_config(model_name: str, **kwargs):
             "act_fn": "gelu",
             "attention_dir": "bidirectional",
         }
+    elif architecture == "BloomForCausalLM":
+        cfg_dict = {
+            "d_model": hf_config.hidden_size,
+            "d_head": hf_config.hidden_size // hf_config.n_head,
+            "n_heads": hf_config.n_head,
+            "d_mlp": hf_config.hidden_size * 4,
+            "n_layers": hf_config.n_layer,
+            "n_ctx": 2048,  # Capped due to HF Tokenizer Constraints
+            "d_vocab": hf_config.vocab_size,
+            "act_fn": "gelu_fast",
+            "eps": hf_config.layer_norm_epsilon,
+            "normalization_type": "LN",
+            "post_embedding_ln": True,
+            "positional_embedding_type": "alibi",
+        }
+
+    elif architecture == "GPT2LMHeadCustomModel":
+        # santacoder
+        cfg_dict = {
+            "d_model": hf_config.n_embd,
+            "d_head": hf_config.n_embd // hf_config.n_head,
+            "n_heads": hf_config.n_head,
+            "d_mlp": hf_config.n_embd * 4,
+            "n_layers": hf_config.n_layer,
+            "n_ctx": hf_config.n_positions,
+            "eps": hf_config.layer_norm_epsilon,
+            "d_vocab": hf_config.vocab_size,
+            "act_fn": hf_config.activation_function,
+            "use_attn_scale": True,
+            "use_local_attn": False,
+            "scale_attn_by_inverse_layer_idx": hf_config.scale_attn_by_inverse_layer_idx,
+            "normalization_type": "LN",
+        }
     else:
         raise NotImplementedError(f"{architecture} is not currently supported.")
     # All of these models use LayerNorm
@@ -714,6 +815,8 @@ def get_pretrained_model_config(
     fold_ln: bool = False,
     device: Optional[str] = None,
     n_devices: int = 1,
+    default_prepend_bos: bool = True,
+    dtype: torch.dtype = torch.float32,
     **kwargs,
 ):
     """Returns the pretrained model config as an HookedTransformerConfig object.
@@ -737,7 +840,15 @@ def get_pretrained_model_config(
             details). Defaults to False.
         device (str, optional): The device to load the model onto. By
             default will load to CUDA if available, else CPU.
-        n_devices (int): The number of devices to split the model across. Defaults to 1.
+        n_devices (int, optional): The number of devices to split the model across. Defaults to 1.
+        default_prepend_bos (bool, optional): Default behavior of whether to prepend the BOS token when the
+            methods of HookedTransformer process input text to tokenize (only when input is a string).
+            Defaults to True - even for models not explicitly trained with this, heads often use the
+            first position as a resting position and accordingly lose information from the first token,
+            so this empirically seems to give better results. To change the default behavior to False, pass in
+            default_prepend_bos=False. Note that you can also locally override the default behavior by passing
+            in prepend_bos=True/False when you call a method that processes the input string.
+        dtype (torch.dtype, optional): The dtype to load the TransformerLens model in.
         kwargs: Other optional arguments passed to HuggingFace's from_pretrained.
             Also given to other HuggingFace functions when compatible.
 
@@ -769,6 +880,9 @@ def get_pretrained_model_config(
 
     if device is not None:
         cfg_dict["device"] = device
+
+    cfg_dict["dtype"] = dtype
+
     if fold_ln:
         if cfg_dict["normalization_type"] in ["LN", "LNPre"]:
             cfg_dict["normalization_type"] = "LNPre"
@@ -796,6 +910,7 @@ def get_pretrained_model_config(
 
     cfg_dict["device"] = device
     cfg_dict["n_devices"] = n_devices
+    cfg_dict["default_prepend_bos"] = default_prepend_bos
 
     cfg = HookedTransformerConfig.from_dict(cfg_dict)
     return cfg
@@ -868,6 +983,7 @@ def get_pretrained_state_dict(
     official_model_name: str,
     cfg: HookedTransformerConfig,
     hf_model=None,
+    dtype: torch.dtype = torch.float32,
     **kwargs,
 ) -> Dict[str, torch.Tensor]:
     """
@@ -877,10 +993,21 @@ def get_pretrained_state_dict(
 
     hf_model: Optionally, a HuggingFace model object. If provided, we will use
         these weights rather than reloading the model.
+    dtype: The dtype to load the HuggingFace model in.
     kwargs: Other optional arguments passed to HuggingFace's from_pretrained.
         Also given to other HuggingFace functions when compatible.
     """
+    if "torch_dtype" in kwargs:
+        dtype = kwargs["torch_dtype"]
+        del kwargs["torch_dtype"]
     official_model_name = get_official_model_name(official_model_name)
+    if official_model_name == "bigcode/santacoder" and not kwargs.get(
+        "trust_remote_code", False
+    ):
+        logging.warning(
+            "Loading santacoder model requires setting trust_remote_code=True"
+        )
+        kwargs["trust_remote_code"] = True
     if (
         official_model_name.startswith("NeelNanda")
         or official_model_name.startswith("ArthurConmy")
@@ -900,9 +1027,9 @@ def get_pretrained_state_dict(
         state_dict = utils.download_file_from_hf(
             official_model_name, file_name, **kwargs
         )
-        dtype = kwargs.get("torch_dtype", None)
-        if dtype is not None:
-            state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
+
+        # Convert to dtype
+        state_dict = {k: v.to(dtype) for k, v in state_dict.items()}
 
         if cfg.original_architecture == "neel-solu-old":
             state_dict = convert_neel_solu_old_weights(state_dict, cfg)
@@ -915,12 +1042,14 @@ def get_pretrained_state_dict(
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     official_model_name,
                     revision=f"checkpoint-{cfg.checkpoint_value}",
+                    torch_dtype=dtype,
                     **kwargs,
                 )
             elif official_model_name.startswith("EleutherAI/pythia"):
                 hf_model = AutoModelForCausalLM.from_pretrained(
                     official_model_name,
                     revision=f"step{cfg.checkpoint_value}",
+                    torch_dtype=dtype,
                     **kwargs,
                 )
             else:
@@ -928,15 +1057,15 @@ def get_pretrained_state_dict(
                     f"Checkpoints for model {official_model_name} are not supported"
                 )
         elif hf_model is None:
-            if "llama" in official_model_name:
+            if "llama" in official_model_name.lower():
                 raise NotImplementedError("Must pass in hf_model for LLaMA models")
             elif "bert" in official_model_name:
                 hf_model = BertForPreTraining.from_pretrained(
-                    official_model_name, **kwargs
+                    official_model_name, torch_dtype=dtype, **kwargs
                 )
             else:
                 hf_model = AutoModelForCausalLM.from_pretrained(
-                    official_model_name, **kwargs
+                    official_model_name, torch_dtype=dtype, **kwargs
                 )
 
             # Load model weights, and fold in layer norm weights
@@ -954,10 +1083,14 @@ def get_pretrained_state_dict(
             state_dict = convert_gptj_weights(hf_model, cfg)
         elif cfg.original_architecture == "GPTNeoXForCausalLM":
             state_dict = convert_neox_weights(hf_model, cfg)
-        elif cfg.original_architecture == "LLaMAForCausalLM":
+        elif cfg.original_architecture == "LlamaForCausalLM":
             state_dict = convert_llama_weights(hf_model, cfg)
         elif cfg.original_architecture == "BertForMaskedLM":
             state_dict = convert_bert_weights(hf_model, cfg)
+        elif cfg.original_architecture == "BloomForCausalLM":
+            state_dict = convert_bloom_weights(hf_model, cfg)
+        elif cfg.original_architecture == "GPT2LMHeadCustomModel":
+            state_dict = convert_coder_weights(hf_model, cfg)
         else:
             raise ValueError(
                 f"Loading weights from the architecture is not currently supported: {cfg.original_architecture}, generated from model name {cfg.model_name}. Feel free to open an issue on GitHub to request this feature."
@@ -1073,9 +1206,15 @@ def convert_neo_weights(neo, cfg: HookedTransformerConfig):
         state_dict[f"blocks.{l}.attn.W_K"] = W_K
         state_dict[f"blocks.{l}.attn.W_V"] = W_V
 
-        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(cfg.n_heads, cfg.d_head)
-        state_dict[f"blocks.{l}.attn.b_K"] = torch.zeros(cfg.n_heads, cfg.d_head)
-        state_dict[f"blocks.{l}.attn.b_V"] = torch.zeros(cfg.n_heads, cfg.d_head)
+        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn.b_K"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn.b_V"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
 
         W_O = neo.transformer.h[l].attn.attention.out_proj.weight
         W_O = einops.rearrange(W_O, "m (i h)->i h m", i=cfg.n_heads)
@@ -1096,7 +1235,7 @@ def convert_neo_weights(neo, cfg: HookedTransformerConfig):
     state_dict["ln_final.b"] = neo.transformer.ln_f.bias
 
     state_dict["unembed.W_U"] = neo.lm_head.weight.T
-    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab)
+    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
     return state_dict
 
 
@@ -1119,14 +1258,20 @@ def convert_gptj_weights(gptj, cfg: HookedTransformerConfig):
         state_dict[f"blocks.{l}.attn.W_K"] = W_K
         state_dict[f"blocks.{l}.attn.W_V"] = W_V
 
-        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(cfg.n_heads, cfg.d_head)
-        state_dict[f"blocks.{l}.attn.b_K"] = torch.zeros(cfg.n_heads, cfg.d_head)
-        state_dict[f"blocks.{l}.attn.b_V"] = torch.zeros(cfg.n_heads, cfg.d_head)
+        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn.b_K"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn.b_V"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
 
         W_O = gptj.transformer.h[l].attn.out_proj.weight
         W_O = einops.rearrange(W_O, "m (i h)->i h m", i=cfg.n_heads)
         state_dict[f"blocks.{l}.attn.W_O"] = W_O
-        state_dict[f"blocks.{l}.attn.b_O"] = torch.zeros(cfg.d_model)
+        state_dict[f"blocks.{l}.attn.b_O"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
 
         # Layer Norm 1 and 2 are tied.
         state_dict[f"blocks.{l}.ln2.w"] = state_dict[f"blocks.{l}.ln1.w"]
@@ -1211,7 +1356,7 @@ def convert_neox_weights(neox, cfg: HookedTransformerConfig):
     state_dict["ln_final.b"] = neox.gpt_neox.final_layer_norm.bias
 
     state_dict["unembed.W_U"] = neox.embed_out.weight.T
-    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab)
+    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
     return state_dict
 
 
@@ -1236,15 +1381,21 @@ def convert_llama_weights(llama, cfg: HookedTransformerConfig):
         state_dict[f"blocks.{l}.attn.W_K"] = W_K
         state_dict[f"blocks.{l}.attn.W_V"] = W_V
 
-        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(cfg.n_heads, cfg.d_head)
-        state_dict[f"blocks.{l}.attn.b_K"] = torch.zeros(cfg.n_heads, cfg.d_head)
-        state_dict[f"blocks.{l}.attn.b_V"] = torch.zeros(cfg.n_heads, cfg.d_head)
+        state_dict[f"blocks.{l}.attn.b_Q"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn.b_K"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
+        state_dict[f"blocks.{l}.attn.b_V"] = torch.zeros(
+            cfg.n_heads, cfg.d_head, dtype=cfg.dtype
+        )
 
         W_O = llama.model.layers[l].self_attn.o_proj.weight
         W_O = einops.rearrange(W_O, "m (n h)->n h m", n=cfg.n_heads)
         state_dict[f"blocks.{l}.attn.W_O"] = W_O
 
-        state_dict[f"blocks.{l}.attn.b_O"] = torch.zeros(cfg.d_model)
+        state_dict[f"blocks.{l}.attn.b_O"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
 
         state_dict[f"blocks.{l}.ln2.w"] = llama.model.layers[
             l
@@ -1254,17 +1405,17 @@ def convert_llama_weights(llama, cfg: HookedTransformerConfig):
         state_dict[f"blocks.{l}.mlp.W_gate"] = llama.model.layers[
             l
         ].mlp.gate_proj.weight.T
-        state_dict[f"blocks.{l}.mlp.b_in"] = torch.zeros(cfg.d_mlp)
+        state_dict[f"blocks.{l}.mlp.b_in"] = torch.zeros(cfg.d_mlp, dtype=cfg.dtype)
 
         state_dict[f"blocks.{l}.mlp.W_out"] = llama.model.layers[
             l
         ].mlp.down_proj.weight.T
-        state_dict[f"blocks.{l}.mlp.b_out"] = torch.zeros(cfg.d_model)
+        state_dict[f"blocks.{l}.mlp.b_out"] = torch.zeros(cfg.d_model, dtype=cfg.dtype)
 
     state_dict["ln_final.w"] = llama.model.norm.weight
 
     state_dict["unembed.W_U"] = llama.lm_head.weight.T
-    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab)
+    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
 
     return state_dict
 
@@ -1355,7 +1506,7 @@ def convert_opt_weights(opt, cfg: HookedTransformerConfig):
     state_dict["ln_final.w"] = opt.model.decoder.final_layer_norm.weight
     state_dict["ln_final.b"] = opt.model.decoder.final_layer_norm.bias
     state_dict["unembed.W_U"] = opt.lm_head.weight.T
-    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab)
+    state_dict["unembed.b_U"] = torch.zeros(cfg.d_vocab, dtype=cfg.dtype)
     return state_dict
 
 
@@ -1517,6 +1668,133 @@ def convert_bert_weights(bert, cfg: HookedTransformerConfig):
     # "unembed.W_U": mlm_head.decoder.weight.T,
     state_dict["unembed.b_U"] = mlm_head.bias
 
+    return state_dict
+
+
+def convert_bloom_weights(bloom, cfg: HookedTransformerConfig):
+    state_dict = {}
+
+    state_dict["embed.W_E"] = bloom.transformer.word_embeddings.weight
+
+    # Bloom uses post embedding layer norm
+    state_dict["embed.ln.w"] = bloom.transformer.word_embeddings_layernorm.weight
+    state_dict["embed.ln.b"] = bloom.transformer.word_embeddings_layernorm.bias
+
+    for l in range(cfg.n_layers):
+        state_dict[f"blocks.{l}.ln1.w"] = bloom.transformer.h[l].input_layernorm.weight
+        state_dict[f"blocks.{l}.ln1.b"] = bloom.transformer.h[l].input_layernorm.bias
+
+        # Bloom attn weight is stored as a fused matrx. BloomAttn: Linear(in=1024, out=3072)
+        # The .weight returned matrix will be in shape (3072, 1024)
+        W = bloom.transformer.h[l].self_attention.query_key_value.weight
+        # First transpose -> (1024, 3072), then split into (d_model, n_heads, 3, d_head)
+        W_split = W.T.reshape(cfg.d_model, cfg.n_heads, 3, cfg.d_head)
+
+        W_Q, W_K, W_V = W_split[..., 0, :], W_split[..., 1, :], W_split[..., 2, :]
+        W_Q = einops.rearrange(W_Q, "m n h ->n m h", n=cfg.n_heads)
+        W_K = einops.rearrange(W_K, "m n h ->n m h", n=cfg.n_heads)
+        W_V = einops.rearrange(W_V, "m n h ->n m h", n=cfg.n_heads)
+        state_dict[f"blocks.{l}.attn.W_Q"] = W_Q
+        state_dict[f"blocks.{l}.attn.W_K"] = W_K
+        state_dict[f"blocks.{l}.attn.W_V"] = W_V
+
+        qkv_bias = bloom.transformer.h[l].self_attention.query_key_value.bias
+        qkv_bias = qkv_bias.reshape(cfg.n_heads, 3, cfg.d_head)
+
+        state_dict[f"blocks.{l}.attn.b_Q"] = qkv_bias[:, 0, :]
+        state_dict[f"blocks.{l}.attn.b_K"] = qkv_bias[:, 1, :]
+        state_dict[f"blocks.{l}.attn.b_V"] = qkv_bias[:, 2, :]
+
+        W_O = bloom.transformer.h[l].self_attention.dense.weight.T  # [1024, 1024]
+        W_O = einops.rearrange(
+            W_O, "(n h) m->n h m", n=cfg.n_heads
+        )  # [n_heads, d_head, d_model]
+        state_dict[f"blocks.{l}.attn.W_O"] = W_O
+        state_dict[f"blocks.{l}.attn.b_O"] = bloom.transformer.h[
+            l
+        ].self_attention.dense.bias
+
+        state_dict[f"blocks.{l}.ln2.w"] = bloom.transformer.h[
+            l
+        ].post_attention_layernorm.weight
+        state_dict[f"blocks.{l}.ln2.b"] = bloom.transformer.h[
+            l
+        ].post_attention_layernorm.bias
+
+        W_in = bloom.transformer.h[l].mlp.dense_h_to_4h.weight.T
+        state_dict[f"blocks.{l}.mlp.W_in"] = W_in
+        state_dict[f"blocks.{l}.mlp.b_in"] = bloom.transformer.h[
+            l
+        ].mlp.dense_h_to_4h.bias
+
+        W_out = bloom.transformer.h[l].mlp.dense_4h_to_h.weight.T
+        state_dict[f"blocks.{l}.mlp.W_out"] = W_out
+        state_dict[f"blocks.{l}.mlp.b_out"] = bloom.transformer.h[
+            l
+        ].mlp.dense_4h_to_h.bias
+    state_dict["unembed.W_U"] = bloom.lm_head.weight.T  # transpose to match shape
+
+    state_dict["ln_final.w"] = bloom.transformer.ln_f.weight
+    state_dict["ln_final.b"] = bloom.transformer.ln_f.bias
+    return state_dict
+
+
+def convert_coder_weights(model, cfg: HookedTransformerConfig):
+    state_dict = {}
+
+    state_dict["embed.W_E"] = model.transformer.wte.weight
+    state_dict["pos_embed.W_pos"] = model.transformer.wpe.weight
+
+    for l in range(cfg.n_layers):
+        state_dict[f"blocks.{l}.ln1.w"] = model.transformer.h[l].ln_1.weight
+        state_dict[f"blocks.{l}.ln1.b"] = model.transformer.h[l].ln_1.bias
+
+        # In GPT-2, q,k,v are produced by one big linear map, whose output is
+        # concat([q, k, v])
+        W_KV = model.transformer.h[l].attn.kv_attn.weight  # [d_model, 2 * d_head]
+        W_K, W_V = torch.tensor_split(W_KV, 2, dim=1)
+        W_Q = model.transformer.h[l].attn.q_attn.weight  # [d_model, d_model]
+        W_Q = einops.rearrange(W_Q, "m (i h)->i m h", i=cfg.n_heads)
+        W_K = einops.repeat(W_K, "m h -> i m h", i=cfg.n_heads)
+        W_V = einops.repeat(W_V, "m h -> i m h", i=cfg.n_heads)
+
+        state_dict[f"blocks.{l}.attn.W_Q"] = W_Q
+        state_dict[f"blocks.{l}.attn.W_K"] = W_K
+        state_dict[f"blocks.{l}.attn.W_V"] = W_V
+
+        b_Q = einops.rearrange(
+            model.transformer.h[l].attn.q_attn.bias,
+            "(index head)-> index head",
+            index=cfg.n_heads,
+            head=cfg.d_head,
+        )
+        b_KV = model.transformer.h[l].attn.kv_attn.bias  # [2 * d_head]
+        b_K, b_V = torch.tensor_split(b_KV, 2, dim=0)
+        b_K = einops.repeat(b_K, "head -> index head", index=cfg.n_heads)
+        b_V = einops.repeat(b_V, "head -> index head", index=cfg.n_heads)
+        state_dict[f"blocks.{l}.attn.b_Q"] = b_Q
+        state_dict[f"blocks.{l}.attn.b_K"] = b_K
+        state_dict[f"blocks.{l}.attn.b_V"] = b_V
+
+        W_O = model.transformer.h[l].attn.c_proj.weight
+        W_O = einops.rearrange(W_O, "(i h) m->i h m", i=cfg.n_heads)
+        state_dict[f"blocks.{l}.attn.W_O"] = W_O
+        state_dict[f"blocks.{l}.attn.b_O"] = model.transformer.h[l].attn.c_proj.bias
+
+        state_dict[f"blocks.{l}.ln2.w"] = model.transformer.h[l].ln_2.weight
+        state_dict[f"blocks.{l}.ln2.b"] = model.transformer.h[l].ln_2.bias
+
+        W_in = model.transformer.h[l].mlp.c_fc.weight
+        state_dict[f"blocks.{l}.mlp.W_in"] = W_in
+        state_dict[f"blocks.{l}.mlp.b_in"] = model.transformer.h[l].mlp.c_fc.bias
+
+        W_out = model.transformer.h[l].mlp.c_proj.weight
+        state_dict[f"blocks.{l}.mlp.W_out"] = W_out
+        state_dict[f"blocks.{l}.mlp.b_out"] = model.transformer.h[l].mlp.c_proj.bias
+    state_dict["unembed.W_U"] = model.lm_head.weight.T
+
+    state_dict["ln_final.w"] = model.transformer.ln_f.weight
+    state_dict["ln_final.b"] = model.transformer.ln_f.bias
     return state_dict
 
 

@@ -1,13 +1,19 @@
+"""Utils.
+
+This module contains varied utility functions used throughout the library.
+"""
 from __future__ import annotations
 
 import inspect
 import json
 import re
 import shutil
+from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union, cast
 
 import einops
 import numpy as np
+import pytest
 import torch
 import torch.nn.functional as F
 import transformers
@@ -21,6 +27,7 @@ from transformers import AutoTokenizer
 from transformer_lens import FactoredMatrix
 
 CACHE_DIR = transformers.TRANSFORMERS_CACHE
+USE_DEFAULT_VALUE = None
 
 
 def select_compatible_kwargs(
@@ -55,11 +62,8 @@ def download_file_from_hf(
         **select_compatible_kwargs(kwargs, hf_hub_download),
     )
 
-    # Load to the CPU device if CUDA is not available
-    map_location = None if torch.cuda.is_available() else torch.device("cpu")
-
     if file_path.endswith(".pth") or force_is_torch:
-        return torch.load(file_path, map_location=map_location)
+        return torch.load(file_path, map_location="cpu")
     elif file_path.endswith(".json"):
         return json.load(open(file_path, "r"))
     else:
@@ -296,7 +300,7 @@ def sample_logits(
     temperature: float = 1.0,
     freq_penalty: float = 0.0,
     tokens: Optional[Int[torch.Tensor, "batch pos"]] = None,
-) -> Float[torch.Tensor, "batch"]:
+) -> Int[torch.Tensor, "batch"]:
     """
     Sample from the logits, in order to generate text
 
@@ -348,10 +352,11 @@ def sample_logits(
                 -1, sorted_indices, sorted_indices_to_remove
             )
             final_logits = final_logits.masked_fill(indices_to_remove, -float("inf"))
+
+        final_logits = final_logits.to(torch.float32)
         return torch.distributions.categorical.Categorical(logits=final_logits).sample()
 
 
-# %%
 # Type alias
 SliceInput: Type = Optional[
     Union[
@@ -364,7 +369,8 @@ SliceInput: Type = Optional[
         np.ndarray,
     ]
 ]
-"""
+"""An object that represents a slice input. It can be a tuple of integers or a slice object.
+
 An optional type alias for a slice input used in the `ActivationCache` module.
 
 A `SliceInput` can be one of the following types:
@@ -375,14 +381,12 @@ A `SliceInput` can be one of the following types:
     - `torch.Tensor`: a tensor containing a boolean mask or a list of indices to be selected from the input tensor.
 
 `SliceInput` is used in the `apply_ln_to_stack` method in the `ActivationCache` module.
-
-:class:`SliceInput`
-    An object that represents a slice input. It can be a tuple of integers or a slice object.
 """
 
 
 class Slice:
-    """
+    """An object that represents a slice input. It can be a tuple of integers or a slice object.
+
     We use a custom slice syntax because Python/Torch's don't let us reduce the number of dimensions:
 
     Note that slicing with input_slice=None means do nothing, NOT add an extra dimension (use unsqueeze for that)
@@ -399,9 +403,6 @@ class Slice:
     elif input_slice = (1, 5, 2), tensor -> tensor[1:5:2] (ie indexing with [1, 3])
     elif input_slice = [1, 4, 5], tensor -> tensor[[1, 4, 5]] (ie changing the first axis to have length 3, and taking the indices 1, 4, 5 out).
     elif input_slice is a Tensor, same as list - Tensor is assumed to be a 1D list of indices.
-
-    :class: `Slice`
-        An object that represents a slice input. It can be a tuple of integers or a slice object.
     """
 
     def __init__(
@@ -413,9 +414,6 @@ class Slice:
 
         Args:
             input_slice (SliceInput): The slice to apply. Can be an int, a tuple, a list, a torch.Tensor, or None. If None, do nothing.
-
-        Returns:
-            Slice: A Slice object that can be applied to a tensor.
 
         Raises:
             ValueError: If the input_slice is not one of the above types.
@@ -462,7 +460,7 @@ class Slice:
     def indices(
         self,
         max_ctx: Optional[int] = None,
-    ) -> Union[np.ndarray, np.int64]:
+    ) -> Union[np.ndarray, np.int32, np.int64]:
         """
         Returns the indices when this slice is applied to an axis of size max_ctx. Returns them as a numpy array, for integer slicing it is eg array([4])
 
@@ -487,12 +485,9 @@ class Slice:
         return f"Slice: {self.slice} Mode: {self.mode} "
 
 
-# %%
-
-
 def get_act_name(
     name: str,
-    layer: Optional[int] = None,
+    layer: Optional[Union[int, str]] = None,
     layer_type: Optional[str] = None,
 ):
     """
@@ -579,7 +574,7 @@ def get_act_name(
         "attn_scores",
     ]:
         layer_type = "attn"
-    elif name in ["pre", "post", "mid"]:
+    elif name in ["pre", "post", "mid", "pre_linear"]:
         layer_type = "mlp"
     elif layer_type in layer_type_alias:
         layer_type = layer_type_alias[layer_type]
@@ -605,26 +600,84 @@ def remove_batch_dim(
         return tensor
 
 
+# Note: Docstring won't be tested with PyTest (it's ignored), as it thinks this is a regular unit
+# test (because it's name is prefixed `test_`).
+@pytest.mark.skip
 def test_prompt(
     prompt: str,
     answer: str,
-    model,
-    prepend_space_to_answer: bool = True,
-    print_details: bool = True,
-    prepend_bos: bool = True,
-    top_k: int = 10,
-):
-    """
-    Function to test whether a model can give the correct answer to a prompt. Intended for exploratory analysis, so it prints things out rather than returning things.
+    model,  # Can't give type hint due to circular imports
+    prepend_space_to_answer: Optional[bool] = True,
+    print_details: Optional[bool] = True,
+    prepend_bos: Optional[bool] = USE_DEFAULT_VALUE,
+    top_k: Optional[int] = 10,
+) -> None:
+    """Test if the Model Can Give the Correct Answer to a Prompt.
 
-    Works for multi-token answers and multi-token prompts.
+    Intended for exploratory analysis. Prints out the performance on the answer (rank, logit, prob),
+    as well as the top k tokens. Works for multi-token prompts and multi-token answers.
 
-    Will always print the ranks of the answer tokens, and if print_details will print the logit and prob for the answer tokens and the top k tokens returned for each answer position.
+    Warning:
+
+    This will print the results (it does not return them).
+
+    Examples:
+
+    >>> from transformer_lens import HookedTransformer, utils
+    >>> model = HookedTransformer.from_pretrained("tiny-stories-1M")
+    Loaded pretrained model tiny-stories-1M into HookedTransformer
+
+    >>> prompt = "Why did the elephant cross the"
+    >>> answer = "road"
+    >>> utils.test_prompt(prompt, answer, model)
+    Tokenized prompt: ['<|endoftext|>', 'Why', ' did', ' the', ' elephant', ' cross', ' the']
+    Tokenized answer: [' road']
+    Performance on answer token:
+    Rank: 2        Logit: 14.24 Prob:  3.51% Token: | road|
+    Top 0th token. Logit: 14.51 Prob:  4.59% Token: | ground|
+    Top 1th token. Logit: 14.41 Prob:  4.18% Token: | tree|
+    Top 2th token. Logit: 14.24 Prob:  3.51% Token: | road|
+    Top 3th token. Logit: 14.22 Prob:  3.45% Token: | car|
+    Top 4th token. Logit: 13.92 Prob:  2.55% Token: | river|
+    Top 5th token. Logit: 13.79 Prob:  2.25% Token: | street|
+    Top 6th token. Logit: 13.77 Prob:  2.21% Token: | k|
+    Top 7th token. Logit: 13.75 Prob:  2.16% Token: | hill|
+    Top 8th token. Logit: 13.64 Prob:  1.92% Token: | swing|
+    Top 9th token. Logit: 13.46 Prob:  1.61% Token: | park|
+    Ranks of the answer tokens: [(' road', 2)]
+
+    Args:
+        prompt:
+            The prompt string, e.g. "Why did the elephant cross the".
+        answer:
+            The answer, e.g. "road". Note that if you set prepend_space_to_answer to False, you need
+            to think about if you have a space before the answer here (as e.g. in this example the
+            answer may really be " road" if the prompt ends without a trailing space).
+        model:
+            The model.
+        prepend_space_to_answer:
+            Whether or not to prepend a space to the answer. Note this will only ever prepend a
+            space if the answer doesn't already start with one.
+        print_details:
+            Print the prompt (as a string but broken up by token), answer and top k tokens (all
+            with logit, rank and probability).
+        prepend_bos:
+            Overrides self.cfg.default_prepend_bos if set. Whether to prepend
+            the BOS token to the input (applicable when input is a string). Models generally learn
+            to use the BOS token as a resting place for attention heads (i.e. a way for them to be
+            "turned off"). This therefore often improves performance slightly.
+        top_k:
+            Top k tokens to print details of (when print_details is set to True).
+
+    Returns:
+        None (just prints the results directly).
     """
     if prepend_space_to_answer and not answer.startswith(" "):
         answer = " " + answer
     # GPT-2 often treats the first token weirdly, so lets give it a resting position
-    tokens = model.to_tokens(prompt + answer, prepend_bos=prepend_bos)
+    prompt_tokens = model.to_tokens(prompt, prepend_bos=prepend_bos)
+    answer_tokens = model.to_tokens(answer, prepend_bos=False)
+    tokens = torch.cat((prompt_tokens, answer_tokens), dim=1)
     prompt_str_tokens = model.to_str_tokens(prompt, prepend_bos=prepend_bos)
     answer_str_tokens = model.to_str_tokens(answer, prepend_bos=False)
     prompt_length = len(prompt_str_tokens)
@@ -659,7 +712,6 @@ def test_prompt(
     rprint(f"[b]Ranks of the answer tokens:[/b] {answer_ranks}")
 
 
-# %%
 def transpose(tensor: Float[torch.Tensor, "... a b"]) -> Float[torch.Tensor, "... b a"]:
     """
     Utility to swap the last two dimensions of a tensor, regardless of the number of leading dimensions
@@ -668,10 +720,10 @@ def transpose(tensor: Float[torch.Tensor, "... a b"]) -> Float[torch.Tensor, "..
 
 
 def composition_scores(
-    left: FactoredMatrix, right: FactoredMatrix, broadcast_dims=True
+    left: "FactoredMatrix", right: "FactoredMatrix", broadcast_dims=True
 ) -> Union[
     Float[torch.Tensor, "*leading_dims"],
-    Float[torch.Tensor, "*leading_dims_left *T.leading_dims_right"],
+    Float[torch.Tensor, "*leading_dims_left_and_right"],
 ]:
     """
     See `HookedTransformer.all_composition_scores` for documentation.
@@ -695,7 +747,6 @@ def composition_scores(
     return comp_norms / r_norms / l_norms
 
 
-# %%
 def get_dataset(dataset_name: str, **kwargs) -> Dataset:
     """
     Returns a small HuggingFace dataset, for easy testing and exploration. Accesses several convenience datasets with 10,000 elements (dealing with the enormous 100GB - 2TB datasets is a lot of effort!). Note that it returns a dataset (ie a dictionary containing all the data), *not* a DataLoader (iterator over the data + some fancy features). But you can easily convert it to a DataLoader.
@@ -786,3 +837,305 @@ def check_structure(
         print(f"row mismatch: {row_mismatch}")
     elif col_mismatch:
         print(f"column mismatch: {col_mismatch}")
+
+
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        # Parse the PyTorch version to check if it's below version 2.0
+        major_version = int(torch.__version__.split(".")[0])
+        if major_version >= 2:
+            return torch.device("mps")
+
+    return torch.device("cpu")
+
+
+def override_or_use_default_value(
+    default_flag: Any,
+    override: Optional[Any] = None,
+) -> Any:
+    """
+    Determines which flag to return based on whether an overriding flag is provided.
+    If a not-None overriding flag is provided, it is returned.
+    Otherwise, the global flag is returned.
+    """
+    return override if override is not None else default_flag
+
+
+def get_offset_position_ids(
+    past_kv_pos_offset: int,
+    attention_mask: Int[torch.Tensor, "batch offset_pos"],
+) -> Int[torch.Tensor, "batch pos"]:
+    """
+    Returns the indices of non-padded tokens, offset by the position of the first attended token.
+    """
+    # shift the position ids so that the id at the the first attended token position becomes zero.
+    # The position ids of the prepending pad tokens are shifted to -1.
+    shifted_position_ids = attention_mask.cumsum(dim=1) - 1  # [batch, tokens_length]
+
+    # Set the position ids of all prepending pad tokens to an arbitrary number (zero here)
+    # just to avoid indexing errors.
+    position_ids = shifted_position_ids.masked_fill(shifted_position_ids < 0, 0)
+    return position_ids[:, past_kv_pos_offset:]  # [pos, batch]
+
+
+def get_cumsum_along_dim(tensor, dim, reverse=False):
+    """
+    Returns the cumulative sum of a tensor along a given dimension.
+    """
+    if reverse:
+        tensor = tensor.flip(dims=(dim,))
+    cumsum = tensor.cumsum(dim=dim)
+    if reverse:
+        cumsum = cumsum.flip(dims=(dim,))
+    return cumsum
+
+
+def get_attention_mask(
+    tokenizer, tokens: torch.Tensor, prepend_bos: bool
+) -> torch.Tensor:
+    """
+    Computes the attention mask for the tokenized input.
+    NOTE: Only the leftmost leading pads (when `padding_side == left`)
+    or rightmost trailing pads (when `padding_side == right`) are
+    considered as real pad tokens that should not be attended.
+
+    Args:
+        tokenizer: The tokenizer used for tokenization.
+        tokens (torch.Tensor): The tokenized input.
+        prepend_bos (bool): If True, a BOS token is prepended to the input.
+
+    Returns:
+        torch.Tensor: The attention mask for the input.
+    """
+
+    # Initialize the attention mask with ones (indicating all tokens should be attended to)
+    attention_mask = torch.ones_like(tokens)
+    is_not_pad_token = tokens.ne(tokenizer.pad_token_id)
+
+    if tokenizer.padding_side == "right":
+        # Zero-out the rightmost trailing pad tokens
+        is_trailing_pad = get_cumsum_along_dim(is_not_pad_token, -1, reverse=True) == 0
+        attention_mask[is_trailing_pad] = 0
+    else:
+        # Zero-out the leftmost leading pad tokens
+        is_leading_pad = get_cumsum_along_dim(is_not_pad_token, -1, reverse=False) == 0
+        attention_mask[is_leading_pad] = 0
+
+        # If the bos token is the same as the pad token,
+        # the last token of the leftmost leading pad tokens is the bos token.
+        # We need to set the attention mask for the bos token to 1.
+        if prepend_bos and tokenizer.bos_token_id == tokenizer.pad_token_id:
+            pad_bos_positions = is_leading_pad.sum(-1) - 1
+            attention_mask[torch.arange(attention_mask.shape[0]), pad_bos_positions] = 1
+
+    return attention_mask
+
+
+def get_nested_attr(obj, attr_str):
+    """
+    Retrieves a nested attribute from an object based on a dot-separated string.
+
+    For example, if `attr_str` is "a.b.c", this function will return `obj.a.b.c`.
+
+    Args:
+        obj (Any): The object from which to retrieve the attribute.
+        attr_str (str): A dot-separated string representing the attribute hierarchy.
+
+    Returns:
+        Any: The value of the nested attribute.
+    """
+    attrs = attr_str.split(".")
+    for attr in attrs:
+        obj = getattr(obj, attr)
+    return obj
+
+
+def set_nested_attr(obj, attr_str, value):
+    """
+    Sets a nested attribute of an object based on a dot-separated string.
+
+    For example, if `attr_str` is "a.b.c", this function will set the value of `obj.a.b.c` to `value`.
+
+    Args:
+        obj (Any): The object on which to set the attribute.
+        attr_str (str): A dot-separated string representing the attribute hierarchy.
+        value (Any): The value to set for the nested attribute.
+    """
+    attrs = attr_str.split(".")
+
+    # Navigate to the deepest object containing the attribute to be set
+    for attr in attrs[:-1]:
+        obj = getattr(obj, attr)
+
+    # Set the nested attribute's value
+    setattr(obj, attrs[-1], value)
+
+
+class LocallyOverridenDefaults:
+    """
+    Context manager that allows temporary overriding of default values within a model.
+    Once the context is exited, the default values are restored.
+
+    WARNING: This context manager must be used for any function/method that directly accesses
+    default values which may be overridden by the user using the function/method's arguments,
+    e.g., `model.cfg.default_prepend_bos` and `model.tokenizer.padding_side` which can be
+    overriden by `prepend_bos` and `padding_side` arguments, respectively, in the `to_tokens`.
+    """
+
+    def __init__(self, model, **overrides):
+        """
+        Initializes the context manager.
+
+        Args:
+            model (HookedTransformer): The model whose default values will be overridden.
+            overrides (dict): Key-value pairs of properties to override and their new values.
+        """
+        self.model = model
+        self.overrides = overrides
+
+        # Dictionary defining valid defaults, valid values, and locations to find and store them
+        self.values_with_defaults = {
+            "prepend_bos": {
+                "default_location": "model.cfg.default_prepend_bos",
+                "valid_values": [USE_DEFAULT_VALUE, True, False],
+                "skip_overriding": False,
+                "default_value_to_restore": None,  # Will be set later
+            },
+            "padding_side": {
+                "default_location": "model.tokenizer.padding_side",
+                "valid_values": [USE_DEFAULT_VALUE, "left", "right"],
+                "skip_overriding": model.tokenizer
+                is None,  # Do not override if tokenizer is None
+                "default_value_to_restore": None,  # Will be set later
+            },
+        }
+
+        # Ensure provided overrides are defined in the dictionary above
+        for override in overrides:
+            assert override in self.values_with_defaults, (
+                f"{override} is not a valid parameter to override. "
+                f"Valid parameters are {self.values_with_defaults.keys()}."
+            )
+
+    def __enter__(self):
+        """
+        Override default values upon entering the context.
+        """
+        for property, override in self.overrides.items():
+            info = self.values_with_defaults[property]
+            if info["skip_overriding"]:
+                continue  # Skip if overriding for this property is disabled
+
+            # Ensure the override is a valid value
+            valid_values = info["valid_values"]
+            assert (
+                override in valid_values
+            ), f"{property} must be one of {valid_values}, but got {override}."
+
+            # Fetch current default and store it to restore later
+            default_location = info["default_location"]
+            default_value = get_nested_attr(self, default_location)
+            info["default_value_to_restore"] = deepcopy(default_value)
+
+            # Override the default value
+            locally_overriden_value = override_or_use_default_value(
+                default_value, override
+            )
+            set_nested_attr(self, default_location, locally_overriden_value)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Restore default values upon exiting the context.
+        """
+        for property in self.overrides:
+            info = self.values_with_defaults[property]
+            if info["skip_overriding"]:
+                continue
+
+            # Restore the default value from before the context was entered
+            default_location = info["default_location"]
+            default_value = info["default_value_to_restore"]
+            set_nested_attr(self, default_location, default_value)
+
+
+def get_tokenizer_with_bos(tokenizer):
+    """
+    Returns the tokenizer initialized with add_bos_token=True.
+    Such a tokenizer should be set as the default tokenizer because the tokenization of some
+    tokenizers like LlamaTokenizer are different when bos token is automatically/manually
+    prepended.
+
+    Args:
+        tokenizer (AutoTokenizer): The tokenizer to initialize with add_bos_token=True.
+
+    Returns:
+        AutoTokenizer: The tokenizer initialized with add_bos_token=True.
+    """
+    init_kwargs = deepcopy(tokenizer.init_kwargs)
+    pretrained_model_name_or_path = init_kwargs.pop("name_or_path")
+    add_bos_token = init_kwargs.pop("add_bos_token", None)
+    if add_bos_token is None:
+        add_bos_token = getattr(tokenizer, "add_bos_token", False)
+
+    if add_bos_token:
+        tokenizer_with_bos = tokenizer
+    else:
+        tokenizer_with_bos = AutoTokenizer.from_pretrained(
+            pretrained_model_name_or_path, add_bos_token=True, **init_kwargs
+        )
+
+    return tokenizer_with_bos
+
+
+def get_input_with_manually_prepended_bos(tokenizer, input):
+    """
+    Manually prepends the bos token to the input.
+
+    Args:
+        tokenizer (AutoTokenizer): The tokenizer to use for prepending the bos token.
+        input (Union[str, List[str]]): The input to prepend the bos token to.
+
+    Returns:
+        Union[str, List[str]]: The input with the bos token manually prepended.
+    """
+    if isinstance(input, str):
+        input = tokenizer.bos_token + input
+    else:
+        input = [tokenizer.bos_token + string for string in input]
+    return input
+
+
+def get_tokens_with_bos_removed(tokenizer, tokens):
+    """
+    Removes the bos token from the beginning of each sequence in `tokens`.
+    The last dimension of `tokens` must be the sequence length.
+
+    Args:
+        tokenizer (AutoTokenizer): The tokenizer used to tokenize the input.
+        tokens (torch.Tensor): The tokenized input.
+
+    Returns:
+        torch.Tensor: The tokenized input with the bos token removed.
+    """
+    if tokenizer.padding_side == "right":
+        return tokens[..., 1:]
+
+    else:
+        bos_removed_shape = list(tokens.shape)
+        bos_removed_shape[-1] -= 1
+
+        if tokenizer.bos_token_id == tokenizer.pad_token_id:
+            is_not_pad_token = tokens.ne(tokenizer.pad_token_id)
+            is_leading_pad = (
+                get_cumsum_along_dim(is_not_pad_token, -1, reverse=False) == 0
+            )
+            real_bos_positions = is_leading_pad.sum(-1) - 1
+        else:
+            real_bos_positions = (tokens == tokenizer.bos_token_id).int().argmax(-1)
+
+        tokens = tokens.scatter(
+            dim=1, index=real_bos_positions.unsqueeze(-1), value=-100
+        )
+        return tokens[tokens != -100].view(*bos_removed_shape)
